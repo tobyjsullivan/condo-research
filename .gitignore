@@ -1,4 +1,5 @@
 /.idea
 target/
 secrets.conf
+research-history.csv
 
