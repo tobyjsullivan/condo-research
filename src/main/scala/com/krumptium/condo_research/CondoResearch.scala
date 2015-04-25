@@ -1,6 +1,7 @@
 package com.krumptium.condo_research
 
-import java.io.{FileReader, FileWriter, File}
+import java.io.{FileWriter, File}
+import java.net.URL
 
 import com.amazonaws.auth.BasicAWSCredentials
 import com.amazonaws.services.s3.AmazonS3Client
@@ -8,6 +9,7 @@ import com.amazonaws.services.s3.model.PutObjectRequest
 import com.typesafe.config.ConfigFactory
 import org.openqa.selenium._
 import org.openqa.selenium.firefox.FirefoxDriver
+import org.openqa.selenium.remote.{RemoteWebDriver, DesiredCapabilities}
 
 import scala.collection.JavaConversions._
 import scala.io.Source
@@ -21,6 +23,7 @@ object CondoResearch extends App {
   val keyPrefix = config.getString("aws.s3.keyPrefix")
 
   val baseUrl: String = config.getString("crawler.listingsUrl")
+  val runHeadless: Boolean = config.getBoolean("crawler.runHeadless")
 
   val humanizedClickDelay: Int = 3 * 1000 // 3 Seconds
   val pauseBetweenSearches: Int = 49 * 60 * 1000 // 49 minutes
@@ -100,7 +103,13 @@ object CondoResearch extends App {
     def getViewDetailsButton(driver: WebDriver, listingTableId: String): WebElement =
       driver.findElement(By.xpath(viewDetailsSelector(listingTableId)))
 
-    val driver: WebDriver = new FirefoxDriver()
+    val driver: WebDriver =
+      if (runHeadless)
+        new RemoteWebDriver(
+          new URL("http://localhost:4444/wd/hub"),
+          DesiredCapabilities.firefox())
+      else
+        new FirefoxDriver()
 
     driver.get(baseUrl)
 
