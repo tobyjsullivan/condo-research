@@ -1,6 +1,6 @@
 package com.krumptium.condo_research
 
-import java.io.{FileWriter, File}
+import java.io.{FileReader, FileWriter, File}
 
 import com.amazonaws.auth.BasicAWSCredentials
 import com.amazonaws.services.s3.AmazonS3Client
@@ -10,6 +10,7 @@ import org.openqa.selenium._
 import org.openqa.selenium.firefox.FirefoxDriver
 
 import scala.collection.JavaConversions._
+import scala.io.Source
 
 object CondoResearch extends App {
   val config = ConfigFactory.load()
@@ -24,7 +25,10 @@ object CondoResearch extends App {
   val humanizedClickDelay: Int = 3 * 1000 // 3 Seconds
   val pauseBetweenSearches: Int = 49 * 60 * 1000 // 49 minutes
 
-  val viewDetailsSelector = "//div[@id='divViewDetails']"
+  val researchHistoryFilePath = "research-history.csv"
+  val historyFile = new File(researchHistoryFilePath)
+
+  var researchedListings: Set[String] = loadResearchHistory()
 
   // Print configs to help ensure loaded
   println("Key: "+awsKey)
@@ -37,7 +41,34 @@ object CondoResearch extends App {
   while (true) {
     crawlRecentResults()
 
+    println("Finished current search. Waiting a few minutes.")
+
     Thread.sleep(pauseBetweenSearches) // Pause to not spam the server with searches
+  }
+  
+  def loadResearchHistory(): Set[String] = {
+    if (historyFile.exists()) {
+      val reader = Source.fromFile(historyFile)
+      val history = reader.getLines().toSet
+      reader.close()
+      history
+    } else
+      Set()
+  }
+
+  def addListingToHistory(listingNumber: String): Unit = {
+    researchedListings += listingNumber
+    saveResearchHistory(researchedListings)
+  }
+
+  def saveResearchHistory(history: Set[String]): Unit = {
+    val output = history.mkString("\n")
+
+    if (output.length > 0) {
+      val writer = new FileWriter(historyFile)
+      writer.write(output)
+      writer.close()
+    }
   }
 
   def uploadFileToS3(file: File): Unit = {
@@ -48,6 +79,27 @@ object CondoResearch extends App {
   }
 
   def crawlRecentResults(): Unit = {
+    val propertyDetailGridSelector = "//table[contains(@class,'PropertyDetailGridTableBorder')]"
+    def listingNumberSelector(gridId: String): String = s"//table[@id='$gridId']/tbody/tr/td[2]/table/tbody/tr/td[1]/b"
+    def viewDetailsSelector(gridId: String): String = s"//table[@id='$gridId']//div[@id='divViewDetails']"
+
+    def getPropertyListings(driver: WebDriver): List[WebElement] =
+      driver.findElements(By.xpath(propertyDetailGridSelector)).toList
+
+    def getPropertyListing(driver: WebDriver, idx: Int): WebElement = {
+      val listings = getPropertyListings(driver) // We re-fetch all the listings because they are invalid once page changes
+      listings(idx)
+    }
+
+    def getListingTableId(propertyListing: WebElement): String =
+      propertyListing.getAttribute("id")
+
+    def getListingNumber(driver: WebDriver, listingTableId: String) =
+      driver.findElement(By.xpath(listingNumberSelector(listingTableId))).getText
+
+    def getViewDetailsButton(driver: WebDriver, listingTableId: String): WebElement =
+      driver.findElement(By.xpath(viewDetailsSelector(listingTableId)))
+
     val driver: WebDriver = new FirefoxDriver()
 
     driver.get(baseUrl)
@@ -58,58 +110,71 @@ object CondoResearch extends App {
 
     println("Title: " + actualTitle)
 
-    val numDetailsElements: Int = driver.findElements(By.xpath(viewDetailsSelector)).size()
+    val listings = getPropertyListings(driver)
+    val numListings = listings.size
 
-    def getDetailsElement(driver: WebDriver, idx: Int): WebElement =
-      driver.findElements(By.xpath(viewDetailsSelector)).toList(idx)
-
+    val listingNumberToTableId: Map[String, String] =
+      listings.map { propertyListingElement =>
+        val tableId = getListingTableId(propertyListingElement)
+        val listingNumber = getListingNumber(driver, tableId)
+        listingNumber -> tableId
+      }.toMap
 
     for (
-      i <- 0 until numDetailsElements
+      (listingNumber, tableId) <- listingNumberToTableId
     ) yield {
-      val element = getDetailsElement(driver, i)
-      println("Details Tag: " + element.getTagName)
+      println(s"Found listing for: $listingNumber (elementID: $tableId)")
 
-      element.click()
+      if (!researchedListings.contains(listingNumber)) {
+        println("Researching new listing...")
 
-      Thread.sleep(humanizedClickDelay) // Simulate real human
+        val viewDetailsButton = getViewDetailsButton(driver, tableId)
 
-      val addressElement = driver.findElement(By.id("spanAddressClassifier"))
-      val address = addressElement.getText
+        viewDetailsButton.click()
 
-      println("Address: " + address)
+        Thread.sleep(humanizedClickDelay) // Simulate real human
 
-      val listingPageSource = driver.getPageSource
-      val oListingNumber = "V[0-9]{7}".r findFirstIn listingPageSource
+        val addressElement = driver.findElement(By.id("spanAddressClassifier"))
+        val address = addressElement.getText
 
-      println("Listing #: " + oListingNumber.getOrElse(""))
+        println("Address: " + address)
 
-      val iframe = driver.findElement(By.xpath("//iframe[@id='reportFrame']"))
+        val listingPageSource = driver.getPageSource
+        val oListingNumber = "V[0-9]{7}".r findFirstIn listingPageSource
 
-      val iframeSrc = iframe.getAttribute("src")
-      println("Report URL: " + iframeSrc)
+        println("Listing #: " + oListingNumber.getOrElse(""))
 
-      val frameDriver = driver.switchTo().frame(iframe)
+        val iframe = driver.findElement(By.xpath("//iframe[@id='reportFrame']"))
+
+        val iframeSrc = iframe.getAttribute("src")
+        println("Report URL: " + iframeSrc)
+
+        val frameDriver = driver.switchTo().frame(iframe)
 
 
-      val reportSourceCode = frameDriver.getPageSource
-      val srcOutput = File.createTempFile("condo-research_" + oListingNumber.getOrElse("") + "_", ".html")
-      val writer = new FileWriter(srcOutput)
-      writer.write(reportSourceCode)
-      writer.close()
+        val reportSourceCode = frameDriver.getPageSource
+        val srcOutput = File.createTempFile("condo-research_" + oListingNumber.getOrElse("") + "_", ".html")
+        val writer = new FileWriter(srcOutput)
+        writer.write(reportSourceCode)
+        writer.close()
 
-      println("Source written to: " + srcOutput.getAbsolutePath)
+        println("Source written to: " + srcOutput.getAbsolutePath)
 
-      uploadFileToS3(srcOutput)
+        uploadFileToS3(srcOutput)
 
-      srcOutput.delete()
-      println("File deleted")
+        srcOutput.delete()
+        println("File deleted")
 
-      val parentDriver = frameDriver.switchTo().parentFrame()
+        val parentDriver = frameDriver.switchTo().parentFrame()
 
-      parentDriver.navigate().back()
+        parentDriver.navigate().back()
 
-      Thread.sleep(2000) // We legitimately have to wait for back-nav to load
+        Thread.sleep(2000) // We legitimately have to wait for back-nav to load
+
+        addListingToHistory(listingNumber)
+      }
+
+
     }
 
     driver.close()
