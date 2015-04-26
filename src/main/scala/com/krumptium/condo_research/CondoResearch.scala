@@ -31,7 +31,6 @@ object CondoResearch extends App {
   val researchHistoryFilePath = "research-history.csv"
   val historyFile = new File(researchHistoryFilePath)
 
-  var researchedListings: Set[String] = loadResearchHistory()
 
   // Print configs to help ensure loaded
   println("Key: "+awsKey)
@@ -42,7 +41,13 @@ object CondoResearch extends App {
   val s3client = new AmazonS3Client(new BasicAWSCredentials(awsKey, awsSecret))
 
   while (true) {
-    crawlRecentResults()
+    // Load up a list of results that were found last time. We don't need these again
+    val lastCrawled: Set[String] = loadResearchHistory()
+
+    val currentListings = crawlRecentResults(lastCrawled)
+
+    // Save the list of results we saw this time
+    saveResearchHistory(currentListings)
 
     println("Finished current search. Waiting a few minutes.")
 
@@ -57,11 +62,6 @@ object CondoResearch extends App {
       history
     } else
       Set()
-  }
-
-  def addListingToHistory(listingNumber: String): Unit = {
-    researchedListings += listingNumber
-    saveResearchHistory(researchedListings)
   }
 
   def saveResearchHistory(history: Set[String]): Unit = {
@@ -81,18 +81,13 @@ object CondoResearch extends App {
     s3client.putObject(new PutObjectRequest(bucketName, keyName, file))
   }
 
-  def crawlRecentResults(): Unit = {
+  def crawlRecentResults(lastCrawledListings: Set[String]): Set[String] = {
     val propertyDetailGridSelector = "//table[contains(@class,'PropertyDetailGridTableBorder')]"
     def listingNumberSelector(gridId: String): String = s"//table[@id='$gridId']/tbody/tr/td[2]/table/tbody/tr/td[1]/b"
     def viewDetailsSelector(gridId: String): String = s"//table[@id='$gridId']//div[@id='divViewDetails']"
 
     def getPropertyListings(driver: WebDriver): List[WebElement] =
       driver.findElements(By.xpath(propertyDetailGridSelector)).toList
-
-    def getPropertyListing(driver: WebDriver, idx: Int): WebElement = {
-      val listings = getPropertyListings(driver) // We re-fetch all the listings because they are invalid once page changes
-      listings(idx)
-    }
 
     def getListingTableId(propertyListing: WebElement): String =
       propertyListing.getAttribute("id")
@@ -134,7 +129,7 @@ object CondoResearch extends App {
     ) yield {
       println(s"Found listing for: $listingNumber (elementID: $tableId)")
 
-      if (!researchedListings.contains(listingNumber)) {
+      if (!lastCrawledListings.contains(listingNumber)) {
         println("Researching new listing...")
 
         val viewDetailsButton = getViewDetailsButton(driver, tableId)
@@ -179,13 +174,12 @@ object CondoResearch extends App {
         parentDriver.navigate().back()
 
         Thread.sleep(2000) // We legitimately have to wait for back-nav to load
-
-        addListingToHistory(listingNumber)
       }
-
-
     }
 
     driver.close()
+
+    // Return the set of listing IDs we found this time
+    listingNumberToTableId.keys.toSet
   }
 }
