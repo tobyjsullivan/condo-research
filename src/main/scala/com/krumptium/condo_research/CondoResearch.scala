@@ -7,6 +7,7 @@ import com.amazonaws.auth.BasicAWSCredentials
 import com.amazonaws.services.s3.AmazonS3Client
 import com.amazonaws.services.s3.model.PutObjectRequest
 import com.typesafe.config.ConfigFactory
+import org.joda.time.{DateTimeZone, LocalDateTime}
 import org.openqa.selenium._
 import org.openqa.selenium.firefox.FirefoxDriver
 import org.openqa.selenium.remote.{RemoteWebDriver, DesiredCapabilities}
@@ -53,6 +54,9 @@ object CondoResearch extends App {
 
     Thread.sleep(pauseBetweenSearches) // Pause to not spam the server with searches
   }
+
+  def getCurrentDateString: String =
+    LocalDateTime.now(DateTimeZone.UTC).toString("yyyy-MM-dd")
   
   def loadResearchHistory(): Set[String] = {
     if (historyFile.exists()) {
@@ -75,7 +79,7 @@ object CondoResearch extends App {
   }
 
   def uploadFileToS3(file: File): Unit = {
-    val keyName = keyPrefix + file.getName
+    val keyName = keyPrefix + getCurrentDateString + "/" + file.getName
 
     println("Uploading to: "+keyName)
     s3client.putObject(new PutObjectRequest(bucketName, keyName, file))
