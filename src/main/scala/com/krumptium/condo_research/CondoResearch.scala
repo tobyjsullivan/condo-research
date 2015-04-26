@@ -13,6 +13,7 @@ import org.openqa.selenium.remote.{RemoteWebDriver, DesiredCapabilities}
 
 import scala.collection.JavaConversions._
 import scala.io.Source
+import scala.util.Try
 
 object CondoResearch extends App {
   val config = ConfigFactory.load()
@@ -111,79 +112,84 @@ object CondoResearch extends App {
       else
         new FirefoxDriver()
 
-    driver.get(baseUrl)
-
-    Thread.sleep(humanizedClickDelay) // Simulate real human
-
-    val actualTitle: String = driver.getTitle
-
-    println("Title: " + actualTitle)
-
-    val listings = getPropertyListings(driver)
-    val numListings = listings.size
-
-    val listingNumberToTableId: Map[String, String] =
-      listings.map { propertyListingElement =>
-        val tableId = getListingTableId(propertyListingElement)
-        val listingNumber = getListingNumber(driver, tableId)
-        listingNumber -> tableId
-      }.toMap
-
     for (
-      (listingNumber, tableId) <- listingNumberToTableId
-    ) yield {
-      println(s"Found listing for: $listingNumber (elementID: $tableId)")
+      page <- 1 until 88
+    ) yield researchListingsOnPage(page, driver)
 
-      if (!researchedListings.contains(listingNumber)) {
-        println("Researching new listing...")
+    def researchListingsOnPage(pageNum: Int, driver: WebDriver): Unit = {
+      driver.get(baseUrl)
 
-        val viewDetailsButton = getViewDetailsButton(driver, tableId)
+      Thread.sleep(humanizedClickDelay) // Simulate real human
 
-        viewDetailsButton.click()
+      // Try to get page button. Click it if it exists.
+      val pageButton = Try(driver.findElement(By.xpath(s"//a[text()='$pageNum']")))
+      pageButton.map(_.click())
 
-        Thread.sleep(humanizedClickDelay) // Simulate real human
+      val listings = getPropertyListings(driver)
 
-        val addressElement = driver.findElement(By.id("spanAddressClassifier"))
-        val address = addressElement.getText
+      val listingNumberToTableId: Map[String, String] =
+        listings.map { propertyListingElement =>
+          val tableId = getListingTableId(propertyListingElement)
+          val listingNumber = getListingNumber(driver, tableId)
+          listingNumber -> tableId
+        }.toMap
 
-        println("Address: " + address)
+      for (
+        (listingNumber, tableId) <- listingNumberToTableId
+      ) yield {
+        println(s"Found listing for: $listingNumber (elementID: $tableId)")
 
-        val listingPageSource = driver.getPageSource
-        val oListingNumber = "V[0-9]{7}".r findFirstIn listingPageSource
+        if (!researchedListings.contains(listingNumber)) {
+          println("Researching new listing...")
 
-        println("Listing #: " + oListingNumber.getOrElse(""))
+          val viewDetailsButton = getViewDetailsButton(driver, tableId)
 
-        val iframe = driver.findElement(By.xpath("//iframe[@id='reportFrame']"))
+          viewDetailsButton.click()
 
-        val iframeSrc = iframe.getAttribute("src")
-        println("Report URL: " + iframeSrc)
+          Thread.sleep(humanizedClickDelay) // Simulate real human
 
-        val frameDriver = driver.switchTo().frame(iframe)
+          val addressElement = driver.findElement(By.id("spanAddressClassifier"))
+          val address = addressElement.getText
+
+          println("Address: " + address)
+
+          val listingPageSource = driver.getPageSource
+          val oListingNumber = "V[0-9]{7}".r findFirstIn listingPageSource
+
+          println("Listing #: " + oListingNumber.getOrElse(""))
+
+          val iframe = driver.findElement(By.xpath("//iframe[@id='reportFrame']"))
+
+          val iframeSrc = iframe.getAttribute("src")
+          println("Report URL: " + iframeSrc)
+
+          val frameDriver = driver.switchTo().frame(iframe)
 
 
-        val reportSourceCode = frameDriver.getPageSource
-        val srcOutput = File.createTempFile("condo-research_" + oListingNumber.getOrElse("") + "_", ".html")
-        val writer = new FileWriter(srcOutput)
-        writer.write(reportSourceCode)
-        writer.close()
+          val reportSourceCode = frameDriver.getPageSource
+          val srcOutput = File.createTempFile("condo-research_" + oListingNumber.getOrElse("") + "_", ".html")
+          val writer = new FileWriter(srcOutput)
+          writer.write(reportSourceCode)
+          writer.close()
 
-        println("Source written to: " + srcOutput.getAbsolutePath)
+          println("Source written to: " + srcOutput.getAbsolutePath)
 
-        uploadFileToS3(srcOutput)
+          uploadFileToS3(srcOutput)
 
-        srcOutput.delete()
-        println("File deleted")
+          srcOutput.delete()
+          println("File deleted")
 
-        val parentDriver = frameDriver.switchTo().parentFrame()
+          val parentDriver = frameDriver.switchTo().parentFrame()
 
-        parentDriver.navigate().back()
+          parentDriver.navigate().back()
 
-        Thread.sleep(2000) // We legitimately have to wait for back-nav to load
+          Thread.sleep(2000) // We legitimately have to wait for back-nav to load
 
-        addListingToHistory(listingNumber)
+          addListingToHistory(listingNumber)
+        }
+
+
       }
-
-
     }
 
     driver.close()
